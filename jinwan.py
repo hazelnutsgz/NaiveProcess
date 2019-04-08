@@ -29,111 +29,130 @@ from sklearn.feature_selection import SelectFromModel
 from sklearn.svm import SVC
 import pickle
 from sklearn.neighbors import KNeighborsClassifier
+
+from multiprocessing import Manager
+import multiprocessing.sharedctypes as sharedctypes
+import ctypes
+
+import multiprocessing
+
 ## from sklearn.naive_bayes import BernoulliNB, MultinomialNB, GaussianNB
 
+
+def assign_to_dict(dic, key_list, value):
+    current = dic
+    try:
+        for (index, key) in enumerate(key_list):
+            if index == len(key_list) - 1:
+                current[key] = value
+                return
+            elif current.get(key) is None:
+                current[key] = {}
+            current = current[key]
+    except:
+        import pdb; pdb.set_trace()
+
+def get_classifier(name):
+    if name == "dt":
+        return DecisionTreeClassifier()
+    if name == "dt3":
+        return DecisionTreeClassifier(max_depth=3)
+    if name == "dt5":
+        return DecisionTreeClassifier(max_depth=5)
+    # if name == "xgboost":
+    #     return xgb.XGBClassifier(objective="binary:logistic")
+    # if name == "xgboost3":
+    #     return xgb.XGBClassifier(objective="binary:logistic", max_depth=3)
+    # if name == "xgboost5":
+        # return xgb.XGBClassifier(objective="binary:logistic", max_depth=5)
+    if name == "rf":
+        return RandomForestClassifier(n_estimators=10, max_features=1)
+    if name == "rf3":
+        return RandomForestClassifier(max_depth=3, n_estimators=10, max_features=1)
+    if name == "rf5":
+        return RandomForestClassifier(max_depth=5, n_estimators=10, max_features=1)
+    # if name == "svm":
+    #     return SVC(kernel="linear", C=0.025)
+    # if name == "kn":
+    #     return KNeighborsClassifier(3)
+    return "uname"
 
 def train_and_inference(params):
     classifier_name = params["classifier_name"]
     can = params["can"]
     df_test_list = params["df_test_list"]
     test_csv_list = params["test_csv_list"]
+    train_csv = params["train_csv"]
     df_train = params["df_train"]
-    y_train = params["y_train"]
+    
+    result = {
+        "training": {
+            "time": {
 
-    try:
-        result = {
-            "training": {
-                "time": {
+            }
+        },
+        "inference": {
+            "time": {
 
-                }
+            }, 
+            "precision": {
+            
             },
-            "inference": {
-                "time": {
-
-                }, 
-                "precision": {
+            "recall": {
                 
-                },
-                "recall": {
-                    
-                }
             }
         }
-        def get_classifier(name):
-            if name == "dt":
-                return DecisionTreeClassifier()
-            if name == "xgboost":
-                return xgb.XGBClassifier(objective="binary:logistic")
-            if name == "catboost":
-                return CatBoostClassifier()
-            if name == "adaboost":
-                return AdaBoostClassifier()
-            if name == "rf5":
-                return RandomForestClassifier(max_depth=5, n_estimators=10, max_features=1)
-            if name == "rf3":
-                return RandomForestClassifier(max_depth=3, n_estimators=10, max_features=1)
-            if name == "svm":
-                return SVC(kernel="linear", C=0.025)
-            if name == "kn":
-                return KNeighborsClassifier(3)
-            return "uname"
+    }
 
-        classifier = get_classifier(classifier_name) 
-        df_train_current = df_train[can]
-        candidate_str = "+".join(can)
+    #-----------------------------Training-------------------------------------------#
+
+
+    classifier = get_classifier(classifier_name) 
+    
+    df_train_current = df_train[can]
+    candidate_str = "+".join(can)
+    start = time.time()
+    classifier.fit(df_train_current.values, df_train["IsBot"])
+    end = time.time()
+    
+    assign_to_dict(result, ["training", "time", \
+        classifier_name, train_csv, candidate_str], end - start)
+    print ("{0} Training of data is {1}s".format(classifier_name, str(end-start)) )
+    with open("./model/"+classifier_name+"_"+str(hash(candidate_str))+"_"+str(hash(train_csv))+"cross-check.pkl", "wb") as fp:
+        pickle.dump(classifier, fp)
+
+    #-----------------------------Inference-------------------------------------------#
+
+
+    for (index, df_test) in enumerate(df_test_list):
+        df_test_current = df_test[can]
+        
+        with open("./model/"+classifier_name+"_"+str(hash(candidate_str))+"_"+str(hash(train_csv))+"cross-check.pkl", "rb") as fp:
+            classifier = pickle.load(fp)
+    
         start = time.time()
-        classifier.fit(df_train_current.values, y_train)
+        predicted = classifier.predict(df_test_current.values)
         end = time.time()
+        assign_to_dict(result, ["inference", "time", classifier_name, \
+                train_csv, candidate_str, test_csv_list[index]], end - start)
+        print (" {0} Inference of data {1} is {2}s".format(classifier_name, index, str(end-start)) )
+
+        tn, fp, fn, tp = confusion_matrix(df_test["IsBot"], predicted).ravel()
+        tn = int(tn)
+        fp = int(fp)
+        fn = int(fn)
+        tp = int(tp)
+        assign_to_dict(result, ["inference", "precision", classifier_name, \
+                train_csv, candidate_str, test_csv_list[index]], tp / (tp + fp))
+
+        assign_to_dict(result, ["inference", "recall", classifier_name, \
+                train_csv, candidate_str, test_csv_list[index]], tp / (tp + fn))
         
-        if result["training"]["time"].get(classifier_name) is None:
-            result["training"]["time"][classifier_name] = {}
-        result["training"]["time"][classifier_name][candidate_str] = end - start
-        print ("{0} Training of data is {1}s".format(classifier_name, str(end-start)) )
-        with open("./model/"+classifier_name+"_"+str(hash(candidate_str))+"cross-check.pkl", "wb") as fp:
-            pickle.dump(classifier, fp)
+    print ("--------------------------------------------")
+    print ()
 
-        for (index, (df_test, y_test)) in enumerate(df_test_list):
-            df_test_current = df_test[can] 
-            
-            
-            with open("./model/"+classifier_name+"_"+str(hash(candidate_str))+"cross-check.pkl", "rb") as fp:
-                classifier = pickle.load(fp)
-        
-            start = time.time()
-            predicted = classifier.predict(df_test_current.values)
-            end = time.time()
-            
-            if result["inference"]["time"].get(classifier_name) is None:
-                result["inference"]["time"][classifier_name] = {}
-            if result["inference"]["time"][classifier_name].get(test_csv_list[index]) is None:
-                result["inference"]["time"][classifier_name][test_csv_list[index]] = {}
-            result["inference"]["time"][classifier_name][test_csv_list[index]][candidate_str] = end - start
-            print (" {0} Inference of data {1} is {2}s".format(classifier_name, index, str(end-start)) )
+    return ("success", result)
 
-            tn, fp, fn, tp = confusion_matrix(y_test, predicted).ravel()
-            tn = int(tn)
-            fp = int(fp)
-            fn = int(fn)
-            tp = int(tp)
-
-            if result["inference"]["precision"].get(classifier_name) is None:
-                result["inference"]["precision"][classifier_name] = {}
-            if result["inference"]["precision"][classifier_name].get(test_csv_list[index]) is None:
-                result["inference"]["precision"][classifier_name][test_csv_list[index]] = {}
-            result["inference"]["precision"][classifier_name][test_csv_list[index]][candidate_str] = tp / (tp + fp)
-
-            if result["inference"]["recall"].get(classifier_name) is None:
-                result["inference"]["recall"][classifier_name] = {}
-            if result["inference"]["recall"][classifier_name].get(test_csv_list[index]) is None:
-                result["inference"]["recall"][classifier_name][test_csv_list[index]] = {}
-            result["inference"]["recall"][classifier_name][test_csv_list[index]][candidate_str] = tp / (tp + fn)
-            
-        print ("--------------------------------------------")
-        print ()
-
-        return ("success", result)
-    except:
-        return ("fail", result)
 
 
 def merge_encoding(df_list, key):
@@ -706,163 +725,464 @@ def func_partial(train_csv, partial_list, test_csv_list, parrallel, filename):
         print()
 
 
-# def feature_selection():
-    
+format_column = [
+    'IsBot', 'CountryIso', 'State', 'City', 'Region', \
+    'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
+    'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
+    'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
+    'Ports', 'User_AcceptLanguage', 'Request_Referrer',\
+    'Market', 'HasCookie', 'HasMsIp', 'AppNS', 'Page_UiLanguage'
+]
 
-#     x = SelectKBest(chi2, k=2).fit_transform(X, y)
+to_int_list = ['HasCookie', 'HasMsIp']
 
-def func_cross_check(train_csv, test_csv_list, parrallel, filename):
+to_int32_list = ['CountryIso', 'State', 'City', 'Region', \
+    'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
+    'UserAgent', 'RequestUrl', 'Request_Bytes',\
+    'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
+    'Ports', 'User_AcceptLanguage', 'Request_Referrer',\
+    'Market', 'AppNS', 'Page_UiLanguage']
 
-    format_column = [
-        'IsBot', 'CountryIso', 'State', 'City', 'Region', \
-        'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
-        'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
-        'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
-        'Ports', 'User_AcceptLanguage', 'Request_Referrer',\
-        'Market', 'HasCookie', 'HasMsIp', 'AppNS', 'Page_UiLanguage'
-    ]
+candidates = [
+    'CountryIso', 'State', 'City', 'Region',\
+    'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
+    'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
+    'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
+    'Ports', 'User_AcceptLanguage', 'Request_Referrer',\
+    'Market', 'HasCookie', 'HasMsIp', 'AppNS', 'Page_UiLanguage'
+]
 
-    to_int_list = ['HasCookie', 'HasMsIp']
-    ## to_str_list = ["requestUri", "UserAgent", "Vertical", "PageName", "ClientIP"]
-    
-    candidates = [
+var_candidates = [
+    'CountryIso', 'State', 'City', \
+    'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
+    'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
+    'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
+    'User_AcceptLanguage', 'Request_Referrer',\
+    'Market', 'AppNS', 'Page_UiLanguage'
+]
+
+# geo_candidates = [
+#     'CountryIso', 'State', 'City', 'Region',
+#     'PostalCode', 'Lat', 'Long', 'TimeZone'
+# ]
+
+
+
+candidates_list = {
+    "candidates": [\
         'CountryIso', 'State', 'City', 'Region',\
         'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
         'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
         'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
         'Ports', 'User_AcceptLanguage', 'Request_Referrer',\
         'Market', 'HasCookie', 'HasMsIp', 'AppNS', 'Page_UiLanguage'
-    ]
+    ],
 
-    var_candidates = [
+    "var_candidates": [
         'CountryIso', 'State', 'City', \
         'PostalCode', 'Lat', 'Long', 'TimeZone', 'ClientIp',\
         'UserAgent', 'RequestUrl', 'StatusCode', 'Request_Bytes',\
         'Request_DataCenter', 'Request_Browser', 'FdPartnerName',\
         'User_AcceptLanguage', 'Request_Referrer',\
         'Market', 'AppNS', 'Page_UiLanguage'
-    ]
+    ],
 
-    geo_candidates = [
-        'CountryIso', 'State', 'City', 'Region',
-        'PostalCode', 'Lat', 'Long', 'TimeZone'
-    ]
+    # "geo_candidates": [\
+    #     'CountryIso', 'State', 'City', 'Region',\
+    #     'PostalCode', 'Lat', 'Long', 'TimeZone'
+    # ]
+}
 
-    tree_candidates = [
-        'CountryIso', 'AppNS'
-    ]
+classifier_list = ["dt", "xgboost", "rf5", "rf3", "kn"]
 
-    class ThreadWithReturnValue(Thread):
-        def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
-            Thread.__init__(self, group, target, name, args, kwargs, daemon=daemon)
 
-            self._return = None
+class ThreadWithReturnValue(Thread):
+    def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
+        Thread.__init__(self, group, target, name, args, kwargs, daemon=daemon)
 
-        def run(self):
-            if self._target is not None:
-                self._return = self._target(*self._args, **self._kwargs)
+        self._return = None
 
-        def join(self):
-            Thread.join(self)
-            return self._return
+    def run(self):
+        if self._target is not None:
+            self._return = self._target(*self._args, **self._kwargs)
+
+    def join(self):
+        Thread.join(self)
+        return self._return
+
+def read_csv_file(file_name):
+    return pd.read_csv(file_name, sep='\t', header=0, memory_map=True, low_memory=False)
+
+def shrink(x):
+    return x & ((1<<30)-1)
+
+def train_some(args):
+    print("---------------------------------------------------")
+    classifier_name = args["classifier_name"]
+    can_name = args["can_name"]
+    train_csv = args["train_csv"]
+    index = args["index"]
+    df_train = args["namespace"].df[index]
+
+    print (classifier_name+can_name+train_csv+"Begin............")
+
+    classifier = get_classifier(classifier_name) 
+    can = candidates_list[can_name]
+    df_train_current = df_train[can]
+    start = time.time()
+    classifier.fit(df_train_current.values, df_train["IsBot"])
+    end = time.time()
+
+    print ("{0}{1}{2} Training of data \
+        consume {3}s......".format(classifier_name, can_name, train_csv, str(end-start)) )
+    train_name = train_csv.split("/")[-1].split(".")[0]
+    with open("./model_new/"+classifier_name+"_"+train_name+"_"+can_name+"cross-check.pkl", "wb") as fp:
+        pickle.dump(classifier, fp)
+
+    return [(classifier_name, train_csv, can_name), end - start]
+
+def only_train(train_csv_list, candidates_list, classifier_list, outputfile):
+    df_train_list = []
+    df_train = None
+        
+    train_thread_pool = []
+    for train_csv in train_csv_list:
+        th = ThreadWithReturnValue(target=read_csv_file, args=(train_csv,))
+        th.start()
+        train_thread_pool.append(th)
+        print ("Load Train file asynchrously")
+    
+
+
+    ## Sync the I/O threads
+    for (index, thread) in enumerate(train_thread_pool):
+        df_train = thread.join()
+        df_train.columns = format_column
+        df_train_list.append(df_train)
+
+    for (index, df_train) in enumerate(df_train_list):
+        df_train_list[index].dropna(how='any', inplace=True)
+        df_train_list[index][to_int_list] = \
+                        df_train[to_int_list].astype(int)
+        df_train_list[index][to_int32_list] = \
+                        df_train[to_int32_list].astype(np.int64).apply(shrink)
+        print("finish {0} training".format(str(index)))
+
+    
+    for (filename, df_train) in zip(train_csv_list, df_train_list):
+        train_name = filename.split("/")[-1].split(".")[0]
+        counter = {}
+        bot_count = sum(df_train["IsBot"])
+        assign_to_dict(counter, [filename, "total"], len(df_train) )
+        assign_to_dict(counter, [filename, "bot"], bot_count)
+        assign_to_dict(counter, [filename, "nonbot"], len(df_train)-bot_count) 
+
+        with open("./result_new/cross_check_counter_" + train_name + ".json", "w") as fp:
+            fp.write(json.dumps(counter, indent=4, separators=(',', ': ')))
+
+    ret = {
+        
+    }
+    
+    # mgr = Manager()
+    # ns = mgr.Namespace()
+    # ns.df = df_train_list
+
+    ## Syncronous Code
+
+    for (df_train, train_csv) in zip(df_train_list, train_csv_list):
+        for can_name in candidates_list:    
+            for classifier_name in classifier_list:
+                classifier = get_classifier(classifier_name) 
+                can = candidates_list[can_name]
+                df_train_current = df_train[can]
+                print ("Begin {0} Training of data {1} {2}".format(classifier_name, can_name, train_csv) )
+                start = time.time()
+                classifier.fit(df_train_current.values, df_train["IsBot"])
+                end = time.time()
+                
+                assign_to_dict(ret, ["training", "time", \
+                    classifier_name, train_csv, can_name], end - start)
+
+                print ("{0} Training of data is {1}s".format(classifier_name, str(end-start)) )
+                train_name = train_csv.split("/")[-1].split(".")[0]
+                with open("./model_new/"+classifier_name+"_"+train_name+"_"+can_name+"cross-check.pkl", "wb") as fp:
+                    pickle.dump(classifier, fp)
+
+
+    # args = []
+    # for (index, train_csv) in enumerate(train_csv_list):
+    #     for can_name in candidates_list:    
+    #         for classifier_name in classifier_list:
+    #             args.append({
+    #                 "classifier_name": classifier_name,
+    #                 "can_name": can_name,
+    #                 "train_csv": train_csv,
+    #                 "namespace": ns,
+    #                 "index":index
+    #            })
+
+    # pool = mp.Pool(processes=25)    
+    # results = pool.map(train_some, args)
+    # for result in results:
+    #     classifier_name = result[0][0]
+    #     train_csv = result[0][1]
+    #     can_name = result[0][2]
+    #     time = result[1]
+    #     assign_to_dict(ret, ["training", \
+    #                 classifier_name, can_name, train_csv, "time"], time)
+
+    train_name = train_csv_list[0].split("/")[-1].split(".")[0]
+    with open("./result_new/crosscheck_"+classifier_name+"_"+train_name+"_"+can_name+".json", "w") as fp:
+        fp.write(json.dumps(ret, indent=4, separators=(',', ': ')))     
+
+def inference_some(args):
+    classifier_name = args["classifier_name"]
+    can_name = args["can_name"]
+    train_csv = args["train_csv"]
+    index = args["index"]
+    df_test_list = args["namespace"].df
+    df_test = df_test_list[index]
+    can = candidates_list[can_name]
+
+    df_test_current = df_test[can]
+    train_name = train_csv.split("/")[-1].split(".")[0]
+    with open("./model_new/"+classifier_name+"_"+train_name+"_"+can_name+"cross-check.pkl", "rb") as fp:
+        classifier = pickle.load(fp)
+    start = time.time()
+    predicted = classifier.predict(df_test_current.values)
+    end = time.time()
+    print (" {0} Inference of data {1} is {2}s".format(classifier_name, index, str(end-start)) )
+
+    tn, fp, fn, tp = confusion_matrix(df_test["IsBot"], predicted).ravel()
+    tn = int(tn)
+    fp = int(fp)
+    fn = int(fn)
+    tp = int(tp)
+
+    return [classifier_name, train_csv, can_name, (tp / (tp + fp), tp / (tp + fn)), end-start, index]
+
+def only_inference(train_csv_list, test_csv_list, candidates_list, classifier_list, outputfile):
+    test_thread_pool = []
+    df_test_list =[]
+    for test_csv in test_csv_list:
+        th = ThreadWithReturnValue(target=read_csv_file, args=(test_csv,))
+        th.start()
+        test_thread_pool.append(th)
+        print ("Load Test file asynchrously")
+
+    for (index, thread) in enumerate(test_thread_pool):    
+        df_test = thread.join()
+        df_test.columns = format_column
+        df_test_list.append(df_test)
+
+    for (index, df_test) in enumerate(df_test_list):
+        df_test_list[index].dropna(how='any', inplace=True)
+        df_test_list[index][to_int_list] = \
+                    df_test[to_int_list].astype(int)
+        df_test_list[index][to_int32_list] = \
+                        df_test[to_int32_list].astype(np.int64).apply(shrink)
+        print("finish {0} test".format(str(index)))
+
+    counter = {}
+    for (filename, df_test) in zip(test_csv_list, df_test_list):
+        bot_count = sum(df_test["IsBot"])
+        assign_to_dict(counter, [filename, "total"], len(df_test) )
+        assign_to_dict(counter, [filename, "bot"], bot_count)
+        assign_to_dict(counter, [filename, "nonbot"], len(df_test)-bot_count)
+
+    with open("./result/cross_check_counter_test.json", "w") as fp:
+        fp.write(json.dumps(counter, indent=4, separators=(',', ': ')))
+
+    ret = {
+
+    }
+
+    mgr = Manager()
+    ns = mgr.Namespace()
+    ns.df = df_test_list
+    args = []
+    for train_csv in train_csv_list:
+        for can_name in candidates_list:    
+            for classifier_name in classifier_list:
+                for (index, df_test) in enumerate(df_test_list):
+                    args.append({
+                        "classifier_name": classifier_name,
+                        "can_name": can_name,
+                        "train_csv": train_csv,
+                        "index": index,
+                        "namespace": ns
+                    })
+                    
+                    
+
+    pool = mp.Pool(processes=20)    
+    results = pool.map(inference_some, args)
+    
+    for result in results:
+        classifier_name = result[0]
+        train_csv = result[1]
+        can_name = result[2]
+        precision = result[3][0]
+        recall = result[3][1]
+        time = result[4]
+        index = result[5]
+        assign_to_dict(ret, ["inference", classifier_name, \
+                            train_csv, can_name, test_csv_list[index], "time"], time)
+        assign_to_dict(ret, ["inference", classifier_name, \
+                            train_csv, can_name, test_csv_list[index], "precision"], precision)
+        assign_to_dict(ret, ["inference", classifier_name, \
+                            train_csv, can_name, test_csv_list[index], "recall"], recall)
+
+
+    with open(outputfile, "w") as fp:
+        fp.write(json.dumps(ret, indent=4, separators=(',', ': ')))
+
+def func_cross_check_v2(train_csv_list, candidates_list, classifier_list, test_csv_list):
+    only_train(train_csv_list, candidates_list, \
+            classifier_list, "./result/cross_check_train.json")
+    only_inference(train_csv_list, test_csv_list, \
+        candidates_list, classifier_list, "./result/cross_check_test.json")
+
+
+
+def func_cross_check(train_csv_list, test_csv_list, parrallel, file):
+
+    # tree_candidates = [
+    #     'CountryIso', 'AppNS'
+    # ]
 
     df_test_list = []
+    df_train_list = []
     df_train = None
     y_train = None
     start_time = time.time()
     if parrallel:
-        def read_csv_file(file_name):
-            return pd.read_csv(file_name, sep='\t', header=0, memory_map=True, low_memory=False)
-        
-        thread_pool = []
-
-        th = ThreadWithReturnValue(target=read_csv_file, args=(train_csv,))
-        th.start()
-        thread_pool.append(th)
-        print ("Load Train file asynchrously")
+        train_thread_pool = []
+        test_thread_pool = []
+        for train_csv in train_csv_list:
+            th = ThreadWithReturnValue(target=read_csv_file, args=(train_csv,))
+            th.start()
+            train_thread_pool.append(th)
+            print ("Load Train file asynchrously")
 
         for test_csv in test_csv_list:
             th = ThreadWithReturnValue(target=read_csv_file, args=(test_csv,))
             th.start()
-            thread_pool.append(th)
+            test_thread_pool.append(th)
             print ("Load Test file asynchrously")
 
         
-        for (index, thread) in enumerate(thread_pool):
-            if index == 0:
-                df_train = thread.join()
-                df_train.columns = format_column
-                y_train = df_train['IsBot']
-            else:
-                df_test = thread.join()
-                df_test.columns = format_column
-                y_test = df_test['IsBot']
-                df_test_list.append([df_test, y_test])
+        for (index, thread) in enumerate(train_thread_pool):
+            df_train = thread.join()
+            df_train.columns = format_column
+            df_train_list.append(df_train)
+            
+        for (index, thread) in enumerate(test_thread_pool):    
+            df_test = thread.join()
+            df_test.columns = format_column
+            df_test_list.append(df_test)
 
     else:
-        df_train = pd.read_csv(train_csv, sep='\t', header=0, memory_map=True, low_memory=False)
-        df_train.columns = format_column
-        
-        y_train = df_train['IsBot']
+        for (index, train_csv) in enumerate(train_csv_list):
+            start = time.time()
+            df_train = pd.read_csv(train_csv, sep='\t', header=0)
+            df_train.columns = format_column
+            df_train_list.append(df_train)
+
         for (index, test_csv) in enumerate(test_csv_list):
             start = time.time()
             df_test = pd.read_csv(test_csv, sep='\t', header=0)
             df_test.columns = format_column
-            y_test = df_test['IsBot']
-            df_test_list.append([df_test, y_test])
-
-            end = time.time()
-            print ("Spend {0}s to load {1} testing dataset".format(str(end-start), str(index)))
+            df_test_list.append(df_test)
 
     print ("---------------------All data prepared----------------------------")
     print ("Spend {0} minutes to load all data".format(str(time.time() - start_time)))
     
+    for (index, df_train) in enumerate(df_train_list):
+        df_train_list[index].dropna(how='any', inplace=True)
 
-    import pdb; pdb.set_trace()
+        df_train_list[index][to_int_list] = \
+                        df_train[to_int_list].astype(int)
+        df_train_list[index][to_int32_list] = \
+                        df_train[to_int32_list].astype(np.int64).apply(shrink)
+        print("finish {0} training".format(str(index)))
 
-    y_train = y_train[~pd.isnull(df_train.values).any(axis=1)]
-    df_train = df_train[~pd.isnull(df_train.values).any(axis=1)]
-    df_train[to_int_list] = \
-                    df_train[to_int_list].astype(int)
 
-
-    for (index, (df_test, y_test) ) in enumerate(df_test_list):
-        df_test_list[index][1] = y_test[~pd.isnull(df_test.values).any(axis=1)]
-        df_test_list[index][0] = df_test[~pd.isnull(df_test.values).any(axis=1)]
-        df_test_list[index][0][to_int_list] = \
+    for (index, df_test) in enumerate(df_test_list):
+        df_train_list[index].dropna(how='any', inplace=True)
+        df_test_list[index][to_int_list] = \
                     df_test[to_int_list].astype(int)
-
-    sel = VarianceThreshold(threshold=(.1 * (1 - .1)))
-    var_train = sel.fit_transform(df_train)
-
-
-    # lsvc = LinearSVC(C=0.01, penalty="l1", dual=False).fit(df_train, y_train)    
-    # model = SelectFromModel(lsvc, prefit=True)
-    # svc_train = model.transform(df_train)
-
-
-    clf = ExtraTreesClassifier(n_estimators=50)
-    clf = clf.fit(df_train, y_train)
-    model = SelectFromModel(clf, prefit=True)
-    tree_train = model.transform(df_train)
-
+        df_test_list[index][to_int32_list] = \
+                    df_test[to_int32_list].astype(np.int64).apply(shrink)
+        print("finish {0} test".format(str(index)))
     import pdb; pdb.set_trace()
+    
+    
+    ## import pdb; pdb.set_trace()
+    counter = {}
+    for (filename, df_train) in zip(train_csv_list, df_train_list):
+        bot_count = sum(df_train["IsBot"])
+        assign_to_dict(counter, [filename, "total"], len(df_train) )
+        assign_to_dict(counter, [filename, "bot"], bot_count)
+        assign_to_dict(counter, [filename, "nonbot"], len(df_train)-bot_count) 
+        
 
-    args = []
-    for can in [candidates, var_candidates, geo_candidates, tree_candidates]:    
-        for classifier_name in ["dt", "xgboost", "rf5", "rf3", "kn"]:
+    for (filename, df_test) in zip(test_csv_list, df_test_list):
+        bot_count = sum(df_test["IsBot"])
+        assign_to_dict(counter, [filename, "total"], len(df_test) )
+        assign_to_dict(counter, [filename, "bot"], bot_count)
+        assign_to_dict(counter, [filename, "nonbot"], len(df_test)-bot_count) 
 
-            # th = ThreadWithReturnValue(target=train_and_inference, args=(classifier_name, can,))
-            # th.start()
-            # train_inference_pool.append(th)
-            args.append({
-                "classifier_name": classifier_name,
-                "can": can,
-                "df_test_list": df_test_list,
-                "test_csv_list": test_csv_list,
-                "df_train": df_train,
-                "y_train": y_train
-            })
+    with open("./result/cross_check_counter.json", "w") as fp:
+        fp.write(json.dumps(counter))
+
+
+    print("finish counter")
+    # sel = VarianceThreshold(threshold=(.1 * (1 - .1)))
+    # var_train = sel.fit_transform(df_train)
+
+
+    # # lsvc = LinearSVC(C=0.01, penalty="l1", dual=False).fit(df_train, y_train)    
+    # # model = SelectFromModel(lsvc, prefit=True)
+    # # svc_train = model.transform(df_train)
+
+
+    # clf = ExtraTreesClassifier(n_estimators=50)
+    # clf = clf.fit(df_train, y_train)
+    # model = SelectFromModel(clf, prefit=True)
+    # tree_train = model.transform(df_train)
+
+    for i in range(3, 24):
+        X_new = SelectKBest(chi2, k=i).fit_transform(df_train_list[0][candidates].values, df_train_list[0]["IsBot"])
+        import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
+    
+    results = []
+    for (df_train, train_csv) in zip(df_train_list, train_csv_list):
+        for can in [candidates, var_candidates]:    
+            for classifier_name in ["dt", "xgboost", "rf5", "rf3", "kn"]:
+                # th = ThreadWithReturnValue(target=train_and_inference, args=(classifier_name, can,))
+                # th.start()
+                # train_inference_pool.append(th)
+                # args.append({
+                #     "classifier_name": classifier_name,
+                #     "can": can,
+                #     "df_test_list": df_test_list,
+                #     "test_csv_list": test_csv_list,
+                #     "df_train": df_train,
+                #     "y_train": y_train
+                # })
+                arg = {
+                    "classifier_name": classifier_name,
+                    "can": can,
+                    "df_test_list": df_test_list,
+                    "test_csv_list": test_csv_list,
+                    "df_train": df_train,
+                    "train_csv": train_csv
+                }
+                results.append(train_and_inference(arg))
+
 
     def merge_right_dict(original_dict, new_dict):
         if not isinstance(new_dict, dict):
@@ -877,20 +1197,22 @@ def func_cross_check(train_csv, test_csv_list, parrallel, filename):
 
 
     all_result = {}
-    pool = mp.Pool(processes=20)    
-    results = pool.map(train_and_inference, args)
+    # pool = mp.Pool(processes=20)    
+    # results = pool.map(train_and_inference, args)
     # status, result = item.join()
     for result in results:
         all_result = merge_right_dict(all_result, result[1])
-    import pdb; pdb.set_trace()
-    with open(filename, "w") as fp:
+    with open(file, "w") as fp:
         fp.write(json.dumps(all_result, indent=4, separators=(',', ': ')))
-    
 
-    
+
+
+
+
         
 
 if __name__ == "__main__":
+    # multiprocessing.set_start_method('spawn')
     # func1("./data/3_8_8_half_min.tsv", "./data/3_20_8_half_min.tsv")
     # func_hash("./data/3_8_8_half_min.tsv", "./data/3_20_8_half_min.tsv")
     # sort()
@@ -902,10 +1224,40 @@ if __name__ == "__main__":
     # func_partial("./data/3_6_20_1h.tsv", [1], \
     #     ["./data/3_9_20_1h.tsv", "./data/3_13_20_1h.tsv"], True, "./result/1hour_result.json")
 
+    # func_cross_check_v2(["./data/3_6_20_geo_1s.tsv", "./data/3_6_4_geo_1s.tsv"], \
+    #     candidates_list, classifier_list, ["./data/3_6_20_geo_1s.tsv", "./data/3_9_20_geo_1s.tsv"])
+    
 
-    func_cross_check("./data/3_6_20_geo_1s.tsv",\
-        ["./data/3_6_20_geo_1s.tsv", "./data/3_6_20_geo_1s.tsv"], False, "result/cross_check.json")
+
+    # func_cross_check_v2(["./data/3_6_20_geo_1h.tsv"], \
+    #     candidates_list, classifier_list, \
+    #         ["./data/3_9_20_geo_1h.tsv", "./data/3_13_20_geo_1h.tsv", "./data/3_9_4_geo_1h.tsv", "./data/3_13_4_geo_1h.tsv"])
+
+
+    # func_cross_check(["./data/3_6_20_geo_1h.tsv"], \
+    #     [], True, "result/cross_check.json")
+
+    # func_cross_check(["./data/3_6_20_geo_1h.tsv"], \
+    #     ["./data/3_9_20_geo_1h.tsv", "./data/3_13_20_geo_1h.tsv", \
+    #         "./data/3_9_4_geo_1h.tsv", "./data/3_13_4_geo_1h.tsv"], True, "result/cross_check.json")
 
 
     # func_feature_combination("./data/3_6_20_20min.tsv", \
     #     "./data/3_9_20_20min.tsv", "./result/20min_combination.json")
+
+
+    ## classifier_list = ["dt", "xgboost", "rf5", "rf3", "rf7", "kn"]
+
+
+
+
+
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--clas', '-c', required = True, type = str)
+    parser.add_argument('--data', '-d', required = True, type = int) # 20 or 4
+    ar = parser.parse_args()
+    train_file = "./data/3_6_" + str(ar.data) + "_geo_1h.tsv"
+    only_train([train_file], candidates_list, \
+            [ar.clas], "./result_new/cross_check_train_" + ar.clas + "_" + train_file + ".json")
