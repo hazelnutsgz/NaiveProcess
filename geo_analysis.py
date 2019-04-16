@@ -38,9 +38,11 @@ import multiprocessing
 import math
 
 from ua_parser import user_agent_parser
+import dask
 import dask.dataframe as dd
 
 from pandas_multiprocess import multi_process
+from tqdm import tqdm
 
 def assign_to_dict(dic, key_list, value):
     current = dic
@@ -77,13 +79,13 @@ def ua_parsing(ua_csv):
 
     
     
-    df_ua = pd.read_csv(ua_csv, sep='\t', header=0)
+    df_ua = pd.read_csv("./data/"+ua_csv, sep='\t', header=0)
     df_ua.columns = format_column
 
     ua_dic = {}
     columns=["device_brand", "device_family", "device_model", \
-                "os_family", "os_major", "os_minor", "os_patch", \
-                "user_agent_family", "user_agent_major", "user_agent_minor", "user_agent_patch"]
+                "os_family", "os_major", \
+                "user_agent_family", "user_agent_major"]
     
     for column in columns:
         ua_dic[column] = []
@@ -106,8 +108,9 @@ def ua_parsing(ua_csv):
         ua_dic["IsBot"].append(row["IsBot"])
 
     print (len(df_ua))
-    df_ua.apply(apply_ua, axis=1)
-
+    tqdm.pandas()
+    df_ua.progress_apply(apply_ua, axis=1)
+    
     df_ua = pd.DataFrame(ua_dic)
     df_ua.to_csv("data/ua_" + ua_csv, index=False)
 
@@ -141,9 +144,9 @@ def main(geo_csv):
     df_ua = pd.DataFrame(columns=["os", "device", "ua"])
 
 
-    for lat in range(-90, 90):
+    for lat in range(-90, 90, 3):
         geo_dic[lat] = {}
-        for lon in range(-180, 180):
+        for lon in range(-180, 180, 3):
             geo_dic[lat][lon] = {
                 "bot": 0,
                 "nonbot": 0
@@ -154,98 +157,105 @@ def main(geo_csv):
         if pd.isna(row["Lat"]) or pd.isna(row["Long"]):
             return 
         
-        lat = math.floor(int(row["Lat"]))
-        lon = math.floor(int(row["Long"]))
+        lat = math.floor(int(row["Lat"]))//3 * 3
+        lon = math.floor(int(row["Long"]))//3 * 3
         geo_dic[lat][lon][label] += 1
         
 
-        if pd.isna(row["CountryIso"]):
-            if loc_dic.get("unknown_nation") is None:
-                loc_dic["unknown_nation"] = {
-                    "bot": 0,
-                    "nonbot": 0
-                }
-            loc_dic["unknown_nation"][label] += 1
-            return 
+        # if pd.isna(row["CountryIso"]):
+        #     if loc_dic.get("unknown_nation") is None:
+        #         loc_dic["unknown_nation"] = {
+        #             "bot": 0,
+        #             "nonbot": 0
+        #         }
+        #     loc_dic["unknown_nation"][label] += 1
+        #     return 
 
-        if loc_dic.get(row["CountryIso"]) is None:
-            loc_dic[row["CountryIso"]] = {}
+        # if loc_dic.get(row["CountryIso"]) is None:
+        #     loc_dic[row["CountryIso"]] = {}
 
         
-        if pd.isna(row["State"]):
-            if loc_dic[row["CountryIso"]].get("unknown_state") is None:
-                loc_dic[row["CountryIso"]]["unknown_state"] = {
-                    "bot": 0,
-                    "nonbot": 0
-                }
-            loc_dic[row["CountryIso"]]["unknown_state"][label] += 1
-            return
+        # if pd.isna(row["State"]):
+        #     if loc_dic[row["CountryIso"]].get("unknown_state") is None:
+        #         loc_dic[row["CountryIso"]]["unknown_state"] = {
+        #             "bot": 0,
+        #             "nonbot": 0
+        #         }
+        #     loc_dic[row["CountryIso"]]["unknown_state"][label] += 1
+        #     return
 
-        if loc_dic[row["CountryIso"]].get(row["State"]) is None:
-            loc_dic[row["CountryIso"]][row["State"]] = {}
+        # if loc_dic[row["CountryIso"]].get(row["State"]) is None:
+        #     loc_dic[row["CountryIso"]][row["State"]] = {}
 
 
 
-        if pd.isna(row["City"]):
-            if loc_dic[row["CountryIso"]][row["State"]].get("unknown_city") is None:
-                loc_dic[row["CountryIso"]][row["State"]]["unknown_city"] = {
-                    "bot": 0,
-                    "nonbot": 0
-                }
-            loc_dic[row["CountryIso"]][row["State"]]["unknown_city"][label] += 1
-            return
+        # if pd.isna(row["City"]):
+        #     if loc_dic[row["CountryIso"]][row["State"]].get("unknown_city") is None:
+        #         loc_dic[row["CountryIso"]][row["State"]]["unknown_city"] = {
+        #             "bot": 0,
+        #             "nonbot": 0
+        #         }
+        #     loc_dic[row["CountryIso"]][row["State"]]["unknown_city"][label] += 1
+        #     return
 
-        if loc_dic[row["CountryIso"]][row["State"]].get(row["City"]) is None:
-            loc_dic[row["CountryIso"]][row["State"]][row["City"]] = {
-                "bot": 0,
-                "nonbot": 0   
-            }
+        # if loc_dic[row["CountryIso"]][row["State"]].get(row["City"]) is None:
+        #     loc_dic[row["CountryIso"]][row["State"]][row["City"]] = {
+        #         "bot": 0,
+        #         "nonbot": 0   
+        #     }
         
-        loc_dic[row["CountryIso"]][row["State"]][row["City"]][label] += 1
+        # loc_dic[row["CountryIso"]][row["State"]][row["City"]][label] += 1
 
 
     print (len(df_geo))
     import pdb; pdb.set_trace()
-    df_geo.apply(apply_geo, axis=1)
+    tqdm.pandas()
+    df_geo.progress_apply(apply_geo, axis=1)
 
 
     import pdb; pdb.set_trace()
-
-    
-        
-
-    with open("result/loc_dict2.json", 'w') as fp:
-        fp.write(json.dumps(loc_dic))
 
     with open("result/geo_dict2.json", 'w') as fp:
         fp.write(json.dumps(geo_dic))
 
 def dump_3d_map_csv(filepath):
-    dic = {
-        "name": [],
-        "latitude": [],
-        "longitude": [],
-        "count": []
+
+    ret = {
+        "features": []
     }
     
-    with open("result/geo_dict.json", 'r') as fp:
+    with open("result/geo_dict2.json", 'r') as fp:
         ll = json.loads(fp.read())
     
     for lat in ll:
         for lon in ll[lat]:
-            if ll[lat][lon]["bot"] == 0:
+            if ll[lat][lon]["bot"] < 10:
                 continue
-            dic["count"].append(ll[lat][lon]["bot"])
-            dic["latitude"].append(lat)
-            dic["longitude"].append(lon)
-            dic["name"].append("bot")
+
+            ret["features"].append({
+                "type": "Feature",
+                "properties": {
+                    "place": "All",
+                    "mag": ll[lat][lon]["bot"]/1000
+                },
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        int(lon),
+                        int(lat)
+                    ]
+                }
+            })
     
-    df = pd.DataFrame(dic)
-    df.to_csv(filepath, index=False)
+    with open(filepath, "w") as fp:
+        fp.write(json.dumps(ret))
+
+
 
 if __name__ == "__main__":
-    # ua_parsing("./data/3_9_20_geo_no_hash_1h.tsv")
+    ua_parsing("3_13_20_geo_no_hash_1min.tsv")
 
-    dump_3d_map_csv("./bot.csv")
+    # dump_3d_map_csv("./bar_bot3.json")
+    ## main("data/3_6_20_geo_no_hash_10mins.tsv")
 
 
